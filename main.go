@@ -22,6 +22,15 @@ func main() {
 		log.Fatal(err)
 	}
 
+	result, err := processUserQuery("que productos de papa vendemos?")
+	if err != nil {
+		log.Printf("failed to process user query: %v", err)
+		return
+	}
+	log.Printf("result: %s\n", result)
+
+	return
+
 	http.HandleFunc("/", handlerGeneric)
 	http.HandleFunc("/v1/chat/completions", chatCompletionsHandler)
 

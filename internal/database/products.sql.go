@@ -29,6 +29,7 @@ WITH product_sales AS (
     AND a.vlinart NOT IN ('9', '13')
     AND STR_TO_DATE(m.vfecham, '%Y-%m-%d') >= CURDATE() - INTERVAL 30 DAY
     AND m.vtipmov = 'caj01'
+    AND m.vcantid > 0
   GROUP BY
     a.vcodpro, a.vdescri, l.vdescri, a.vsublin, a.vmarart
 )
@@ -38,8 +39,8 @@ SELECT
   ps.linea,
   ps.sublinea,
   ps.marca,
-  (ps.cantidad_vendida / SUM(ps.cantidad_vendida) OVER ()) * 70 +
-  (ps.num_ventas / SUM(ps.num_ventas) OVER ()) * 30 AS score_popularidad
+  CAST((ps.cantidad_vendida * 1.0 / SUM(ps.cantidad_vendida) OVER ()) * 70.0 +
+  (ps.num_ventas * 1.0 / SUM(ps.num_ventas) OVER ()) * 30.0 AS DECIMAL(10,4)) AS score_popularidad
 FROM product_sales ps
 WHERE ps.cantidad_vendida > 0
 ORDER BY
@@ -52,7 +53,7 @@ type GetListOfProductsRow struct {
 	Linea            string
 	Sublinea         string
 	Marca            string
-	ScorePopularidad int32
+	ScorePopularidad string
 }
 
 // sql/queries/products.sql

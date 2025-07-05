@@ -108,6 +108,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func processUserQuery(userQuery string) (string, error) {
+	log.Println("processing user query...")
 	// Create context and client
 	ctx := context.Background()
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: GeminiKey})
@@ -116,18 +117,34 @@ func processUserQuery(userQuery string) (string, error) {
 	}
 
 	listaProductosFunc := genai.FunctionDeclaration{
-		Name:        "obtenerListaDeProductos",
-		Description: "Obtiene una lista de todos los productos disponibles en la base de datos con información básica de código, descripción, línea, sublínea, marca, y score de popularidad y la devuelve como una cadena JSON.",
-		Parameters:  &genai.Schema{Type: genai.TypeObject},
-		Response:    &genai.Schema{Type: genai.TypeString},
+		Name: "obtenerListaDeProductos",
+		Description: "Obtiene una lista de todos los productos disponibles " +
+			"en la base de datos y la devuelve como una cadena JSON. " +
+			"La lista contiene información básica: " +
+			"código, descripción, línea, sublínea, marca y score de popularidad " +
+			"Un score de popularidad alto indica que es un producto muy vendido o popular. " +
+			"Esta lista se puede usar para: " +
+			"saber que tipo de productos vendemos (lineas y sublineas), " +
+			"saber que marcas de productos tenemos, " +
+			"saber los códigos y nombres de productos que vendemos, " +
+			"saber cuales son los productos más populares o vendidos (score de popularidad)",
+		Parameters: &genai.Schema{Type: genai.TypeObject},
+		Response:   &genai.Schema{Type: genai.TypeString},
 	}
 
+	log.Println("creating genai chat...")
 	chat, err := client.Chats.Create(
 		ctx,
 		GeminiModel,
 		&genai.GenerateContentConfig{
 			SystemInstruction: &genai.Content{
-				Parts: []*genai.Part{{Text: "Eres un agente asistente con una serie de herramientas específicas. Si tus herramientas no son suficientes para contestar al usuario, dícelo de forma amigable y hazle saber tus capacidades. Tus respuestas deben ser concisas y amigables. Debes formatear la respuesta para ser utilizada directamente en un chat de WhatsApp"}},
+				Parts: []*genai.Part{{Text: "Eres un agente asistente de ventas. " +
+					"Debes usar y procesar la información obtenida con estas " +
+					"herramientas para tratar de responder lo mejor posible a las preguntas " +
+					"del usuario. Tus respuestas deben ser concisas y amigables. " +
+					"Debes formatear la respuesta para ser utilizada directamente en un chat de WhatsApp. " +
+					"Si no hay forma de responder a la pregunta con las herramientas " +
+					"que se te han brindado, entonces hazlo saber al usuario."}},
 			},
 			Tools: []*genai.Tool{
 				{
@@ -143,50 +160,61 @@ func processUserQuery(userQuery string) (string, error) {
 		return "", fmt.Errorf("failed to create chat: %w", err)
 	}
 
+	log.Println("sending initial message with user query...")
 	resp, err := chat.SendMessage(ctx, genai.Part{Text: userQuery})
 	if err != nil {
 		return "", fmt.Errorf("failed to send message %w", err)
 	}
 
-	part := resp.Candidates[0].Content.Parts[0]
-	fc := part.FunctionCall
-	if fc != nil {
-		log.Printf("gemini wants to call function: %s\n", fc.Name)
+	cycles := 0
+	for {
+		cycles++
+		log.Printf("cycle %d: checking for FunctionCalls...", cycles)
+		for _, part := range resp.Candidates[0].Content.Parts {
+			if fc := part.FunctionCall; fc != nil {
+				log.Printf("gemini wants to call function: %s\n", fc.Name)
 
-		if fc.Name == "obtenerListaDeProductos" {
-			result := obtenerListaDeProductos()
-			log.Println("executed local function...")
-			log.Println("sending function result back to Gemini...")
-			prompt := fmt.Sprintf(
-				"Eres un asistente. Se te ha dado el resultado de la lista de productos "+
-					"que vendemos. Usa esta información para responder la pregunta del usuario. "+
-					"Resultado: %s",
-				result,
-			)
+				if fc.Name == "obtenerListaDeProductos" {
+					log.Printf("executing %s()...", fc.Name)
+					result := obtenerListaDeProductos()
+					log.Println("sending function result back to Gemini...")
+					prompt := fmt.Sprintf(
+						"Se te ha dado el resultado de la lista de productos "+
+							"que vendemos y su información básica. Usa esta información "+
+							"para responder la pregunta del usuario. "+
+							"Resultado: %s",
+						result,
+					)
 
-			resp, err = chat.SendMessage(
-				ctx,
-				genai.Part{
-					FunctionResponse: &genai.FunctionResponse{
-						Name: "add",
-						Response: map[string]any{
-							"result": result,
+					resp, err = chat.SendMessage(
+						ctx,
+						genai.Part{
+							FunctionResponse: &genai.FunctionResponse{
+								Name: "obtenerListaDeProductos",
+								Response: map[string]any{
+									"result": result,
+								},
+							},
 						},
-					},
-				},
-				genai.Part{Text: prompt},
-			)
-			if err != nil {
-				return "", fmt.Errorf("failed to send function response %w", err)
+						genai.Part{Text: prompt},
+					)
+					if err != nil {
+						log.Printf("failed to send function response: %v", err)
+						return "", fmt.Errorf("failed to send function response %w", err)
+					}
+				}
+				continue
 			}
+			log.Println("no FunctionCalls detected, sending final response to user...")
+			return resp.Text(), nil
 		}
 	}
-	return resp.Text(), nil
 }
 
 func obtenerListaDeProductos() string {
 	db, err := sql.Open("mysql", utils.GetConnString())
 	if err != nil {
+		log.Printf("failed to open db (%s): %v", utils.GetConnString(), err)
 		return "ocurrió un error al obtener la lista de productos"
 	}
 	defer db.Close()
@@ -194,11 +222,13 @@ func obtenerListaDeProductos() string {
 
 	productos, err := queries.GetListOfProducts(context.Background())
 	if err != nil {
+		log.Printf("failed to get products list: %v", err)
 		return "ocurrió un error al obtener la lista de productos"
 	}
 
 	jsonData, err := json.Marshal(productos)
 	if err != nil {
+		log.Printf("failed to marshal results: %v", err)
 		return "ocurrió un error al obtener la lista de productos"
 	}
 
