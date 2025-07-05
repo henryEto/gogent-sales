@@ -1,0 +1,28 @@
+
+--- Incoming Request ---
+Method: POST
+URL: /chat/completions
+Host: host.docker.internal:8080
+Protocol: HTTP/1.1
+Headers:
+  Content-Length: 101
+  Content-Type: application/json
+  Authorization: Bearer my_super_secure_key
+  Accept: */*
+  Accept-Encoding: gzip, deflate, br
+  User-Agent: Python/3.11 aiohttp/3.11.11
+Body:
+{
+  "stream": true, 
+  "model": "gemini-1.5-pro-latest", 
+  "messages": [
+    {
+      "role": "user", 
+      "content": "hola"
+    }
+  ]
+}
+------------------------
+
+
+

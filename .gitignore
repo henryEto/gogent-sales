@@ -1,0 +1,26 @@
+# Compiled Go binaries
+*.exe
+*.dll
+*.so
+*.darwin
+*.linux
+*.windows
+
+# Go module cache and build artifacts
+/pkg/
+/bin/
+/build/
+
+# Environment variables and sensitive data
+.env
+*.env
+
+# Log files
+*.log
+
+# Backup files
+*.bak
+
+# SQL queries and schema
+queries/
+schema/
