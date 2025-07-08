@@ -14,6 +14,7 @@ import (
 var (
 	GeminiKey   string
 	GeminiModel string
+	APIPort     string
 )
 
 func main() {
@@ -22,20 +23,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	result, err := processUserQuery("que productos de papa vendemos?")
-	if err != nil {
-		log.Printf("failed to process user query: %v", err)
-		return
-	}
-	log.Printf("result: %s\n", result)
-
-	return
-
 	http.HandleFunc("/", handlerGeneric)
 	http.HandleFunc("/v1/chat/completions", chatCompletionsHandler)
 
-	log.Println("Server starting on port 8080...")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	log.Printf("Server starting on port%s...\n", APIPort)
+	log.Fatal(http.ListenAndServe(APIPort, nil))
 }
 
 func loadEnv() error {
@@ -45,6 +37,7 @@ func loadEnv() error {
 	}
 	GeminiKey = os.Getenv("GEMINI_API_KEY")
 	GeminiModel = os.Getenv("GEMINI_MODEL")
+	APIPort = fmt.Sprintf(":%v", os.Getenv("API_PORT"))
 
 	return nil
 }

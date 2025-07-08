@@ -50,7 +50,7 @@ type OpenAIUsage struct {
 func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 	// Check for correct method POST
 	if r.Method != http.MethodPost {
-		log.Println("method not allowed...")
+		log.Printf("method not allowed: %v...\n", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -108,7 +108,6 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func processUserQuery(userQuery string) (string, error) {
-	log.Println("processing user query...")
 	// Create context and client
 	ctx := context.Background()
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: GeminiKey})
@@ -132,7 +131,23 @@ func processUserQuery(userQuery string) (string, error) {
 		Response:   &genai.Schema{Type: genai.TypeString},
 	}
 
-	log.Println("creating genai chat...")
+	infoProductosFunc := genai.FunctionDeclaration{
+		Name:        "obtenerInformacionDeProductos",
+		Description: "Obtiene información detallada para una lista de códigos de productos específicos. Devuelve un JSON con el código, descripción, línea, sublínea, marca, existencia, peso promedio por caja, piezas por caja, peso promedio por pieza, y diferentes escalas de precios (detalle, medio mayoreo, mayoreo, especial).",
+		Parameters: &genai.Schema{
+			Type: genai.TypeObject,
+			Properties: map[string]*genai.Schema{
+				"productCodes": {
+					Type:        genai.TypeArray,
+					Description: "Una lista de códigos de productos (strings) para los que se desea obtener información.",
+					Items:       &genai.Schema{Type: genai.TypeString},
+				},
+			},
+			Required: []string{"productCodes"},
+		},
+		Response: &genai.Schema{Type: genai.TypeString},
+	}
+
 	chat, err := client.Chats.Create(
 		ctx,
 		GeminiModel,
@@ -150,6 +165,7 @@ func processUserQuery(userQuery string) (string, error) {
 				{
 					FunctionDeclarations: []*genai.FunctionDeclaration{
 						&listaProductosFunc,
+						&infoProductosFunc,
 					},
 				},
 			},
@@ -160,66 +176,72 @@ func processUserQuery(userQuery string) (string, error) {
 		return "", fmt.Errorf("failed to create chat: %w", err)
 	}
 
-	log.Println("sending initial message with user query...")
 	resp, err := chat.SendMessage(ctx, genai.Part{Text: userQuery})
 	if err != nil {
 		return "", fmt.Errorf("failed to send message %w", err)
 	}
 
-	cycles := 0
-	for {
-		cycles++
-		log.Printf("cycle %d: checking for FunctionCalls...", cycles)
-		for _, part := range resp.Candidates[0].Content.Parts {
-			if fc := part.FunctionCall; fc != nil {
-				log.Printf("gemini wants to call function: %s\n", fc.Name)
-
-				if fc.Name == "obtenerListaDeProductos" {
-					log.Printf("executing %s()...", fc.Name)
-					result := obtenerListaDeProductos()
-					log.Println("sending function result back to Gemini...")
-					prompt := fmt.Sprintf(
-						"Se te ha dado el resultado de la lista de productos "+
-							"que vendemos y su información básica. Usa esta información "+
-							"para responder la pregunta del usuario. "+
-							"Resultado: %s",
-						result,
-					)
-
-					resp, err = chat.SendMessage(
-						ctx,
-						genai.Part{
-							FunctionResponse: &genai.FunctionResponse{
-								Name: "obtenerListaDeProductos",
-								Response: map[string]any{
-									"result": result,
-								},
-							},
-						},
-						genai.Part{Text: prompt},
-					)
-					if err != nil {
-						log.Printf("failed to send function response: %v", err)
-						return "", fmt.Errorf("failed to send function response %w", err)
-					}
-				}
-				continue
-			}
-			log.Println("no FunctionCalls detected, sending final response to user...")
-			return resp.Text(), nil
-		}
-	}
-}
-
-func obtenerListaDeProductos() string {
 	db, err := sql.Open("mysql", utils.GetConnString())
 	if err != nil {
 		log.Printf("failed to open db (%s): %v", utils.GetConnString(), err)
-		return "ocurrió un error al obtener la lista de productos"
+		return "", fmt.Errorf("ocurrió un error al obtener la lista de productos")
 	}
 	defer db.Close()
 	queries := database.New(db)
 
+	for {
+		if len(resp.FunctionCalls()) > 0 {
+			// log.Println("found FunctionCall...")
+			fc := resp.FunctionCalls()[0]
+
+			// log.Printf("executing %s()...", fc.Name)
+			var result string
+			switch fc.Name {
+			case "obtenerListaDeProductos":
+				result = obtenerListaDeProductos(queries)
+			case "obtenerInformacionDeProductos":
+				var codigos []string
+				if argCodes, ok := fc.Args["productCodes"]; ok {
+					if codesSlice, ok := argCodes.([]any); ok {
+						for _, v := range codesSlice {
+							if str, ok := v.(string); ok {
+								codigos = append(codigos, str)
+							}
+						}
+					}
+				} else {
+					log.Println("failed to extract args from FunctionCall...")
+				}
+				result = obtenerInformacionDeProductos(queries, codigos)
+			default:
+				result = fmt.Sprintf("failed to call %s() function", fc.Name)
+			}
+			// log.Println("sending function result back to Gemini...")
+			resp, err = chat.SendMessage(
+				ctx,
+				genai.Part{
+					FunctionResponse: &genai.FunctionResponse{
+						Name: "obtenerListaDeProductos",
+						Response: map[string]any{
+							"result": result,
+						},
+					},
+				},
+			)
+			if err != nil {
+				log.Printf("failed to send function response: %v", err)
+				return "", fmt.Errorf("failed to send function response %w", err)
+			}
+		} else {
+			// log.Println("no FunctionCall found...")
+			break
+		}
+	}
+
+	return resp.Text(), nil
+}
+
+func obtenerListaDeProductos(queries *database.Queries) string {
 	productos, err := queries.GetListOfProducts(context.Background())
 	if err != nil {
 		log.Printf("failed to get products list: %v", err)
@@ -230,6 +252,22 @@ func obtenerListaDeProductos() string {
 	if err != nil {
 		log.Printf("failed to marshal results: %v", err)
 		return "ocurrió un error al obtener la lista de productos"
+	}
+
+	return string(jsonData)
+}
+
+func obtenerInformacionDeProductos(queries *database.Queries, productCodes []string) string {
+	infoProductos, err := queries.GetProductsInfo(context.Background(), productCodes)
+	if err != nil {
+		log.Printf("failed to get products info: %v", err)
+		return "ocurrió un error al obtener la información de los productos"
+	}
+
+	jsonData, err := json.Marshal(infoProductos)
+	if err != nil {
+		log.Printf("failed to marshal results: %v", err)
+		return "ocurrió un error al obtener la información de los productos"
 	}
 
 	return string(jsonData)

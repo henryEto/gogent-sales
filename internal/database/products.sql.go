@@ -7,6 +7,7 @@ package database
 
 import (
 	"context"
+	"strings"
 )
 
 const getListOfProducts = `-- name: GetListOfProducts :many
@@ -73,6 +74,105 @@ func (q *Queries) GetListOfProducts(ctx context.Context) ([]GetListOfProductsRow
 			&i.Sublinea,
 			&i.Marca,
 			&i.ScorePopularidad,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getProductsInfo = `-- name: GetProductsInfo :many
+SELECT
+    a.vcodpro AS codigo,
+    a.vdescri AS descripcion,
+    l.vdescri AS linea,
+    a.vsublin AS sublinea,
+    a.vmarart AS marca,
+    a.vexiact as existencia,
+    a.vmedpes as peso_prom_caja,
+    a.vpresen AS piezas_por_caja,
+    a.vmedpes / a.vpresen AS preo_prom_pieza,
+    g.fac1 AS precio_detalle,
+    g.facd1 AS escala_detalle,
+    g.fac2 AS precio_medio_mayoreo,
+    g.facd2 AS escala_medio_mayoreo,
+    g.fac3 AS precio_mayoreo,
+    g.facd3 AS escala_mayoreo,
+    g.fac4 AS precio__especial,
+    g.facd4 AS escala_especial
+FROM articulos a
+JOIN lineas l ON a.vlinart = l.vlindep
+JOIN grupos g ON a.vcodpro = g.grupo
+WHERE
+    a.vcodpro IN (/*SLICE:product_codes*/?)
+GROUP BY
+    a.vcodpro, a.vdescri, l.vdescri, a.vsublin, a.vmarart
+`
+
+type GetProductsInfoRow struct {
+	Codigo             string
+	Descripcion        string
+	Linea              string
+	Sublinea           string
+	Marca              string
+	Existencia         float64
+	PesoPromCaja       float64
+	PiezasPorCaja      int32
+	PreoPromPieza      interface{}
+	PrecioDetalle      float64
+	EscalaDetalle      string
+	PrecioMedioMayoreo float64
+	EscalaMedioMayoreo string
+	PrecioMayoreo      float64
+	EscalaMayoreo      string
+	PrecioEspecial     float64
+	EscalaEspecial     string
+}
+
+func (q *Queries) GetProductsInfo(ctx context.Context, productCodes []string) ([]GetProductsInfoRow, error) {
+	query := getProductsInfo
+	var queryParams []interface{}
+	if len(productCodes) > 0 {
+		for _, v := range productCodes {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:product_codes*/?", strings.Repeat(",?", len(productCodes))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:product_codes*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetProductsInfoRow
+	for rows.Next() {
+		var i GetProductsInfoRow
+		if err := rows.Scan(
+			&i.Codigo,
+			&i.Descripcion,
+			&i.Linea,
+			&i.Sublinea,
+			&i.Marca,
+			&i.Existencia,
+			&i.PesoPromCaja,
+			&i.PiezasPorCaja,
+			&i.PreoPromPieza,
+			&i.PrecioDetalle,
+			&i.EscalaDetalle,
+			&i.PrecioMedioMayoreo,
+			&i.EscalaMedioMayoreo,
+			&i.PrecioMayoreo,
+			&i.EscalaMayoreo,
+			&i.PrecioEspecial,
+			&i.EscalaEspecial,
 		); err != nil {
 			return nil, err
 		}
