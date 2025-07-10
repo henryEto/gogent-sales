@@ -5,6 +5,7 @@
 *.darwin
 *.linux
 *.windows
+copo-ai-agent
 
 # Go module cache and build artifacts
 /pkg/
