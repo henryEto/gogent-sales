@@ -89,6 +89,7 @@ func (q *Queries) GetListOfProducts(ctx context.Context) ([]GetListOfProductsRow
 }
 
 const getProductsInfo = `-- name: GetProductsInfo :many
+WITH product_sales AS(
 SELECT
     a.vcodpro AS codigo,
     a.vdescri AS descripcion,
@@ -96,6 +97,8 @@ SELECT
     a.vsublin AS sublinea,
     a.vmarart AS marca,
     a.vexiact as existencia,
+    SUM(m.vcantid) AS cantidad_vendida,
+    COUNT(m.vcodpro) AS num_ventas,
     a.vmedpes as peso_prom_caja,
     a.vpresen AS piezas_por_caja,
     a.vmedpes / a.vpresen AS preo_prom_pieza,
@@ -110,10 +113,38 @@ SELECT
 FROM articulos a
 JOIN lineas l ON a.vlinart = l.vlindep
 JOIN grupos g ON a.vcodpro = g.grupo
+  INNER JOIN movimientosd m ON a.vcodpro = m.vcodpro
 WHERE
     a.vcodpro IN (/*SLICE:product_codes*/?)
+    AND STR_TO_DATE(m.vfecham, '%Y-%m-%d') >= CURDATE() - INTERVAL 30 DAY
+    AND m.vtipmov = 'caj01'
+    AND m.vcantid > 0
 GROUP BY
     a.vcodpro, a.vdescri, l.vdescri, a.vsublin, a.vmarart
+)
+SELECT
+  ps.codigo,
+  ps.descripcion,
+  ps.linea,
+  ps.sublinea,
+  ps.marca,
+  ps.existencia,
+  CAST((ps.cantidad_vendida * 1.0 / SUM(ps.cantidad_vendida) OVER ()) * 70.0 +
+  (ps.num_ventas * 1.0 / SUM(ps.num_ventas) OVER ()) * 30.0 AS DECIMAL(10,4)) AS score_popularidad,
+  ps.peso_prom_caja,
+  ps.preo_prom_pieza,
+  ps.precio_detalle,
+  ps.escala_detalle,
+  ps.precio_medio_mayoreo,
+  ps.escala_medio_mayoreo,
+  ps.precio_mayoreo,
+  ps.escala_mayoreo,
+  ps.precio__especial,
+  ps.escala_especial
+FROM product_sales ps
+WHERE ps.cantidad_vendida > 0
+ORDER BY
+  score_popularidad DESC
 `
 
 type GetProductsInfoRow struct {
@@ -123,8 +154,8 @@ type GetProductsInfoRow struct {
 	Sublinea           string
 	Marca              string
 	Existencia         float64
+	ScorePopularidad   string
 	PesoPromCaja       float64
-	PiezasPorCaja      int32
 	PreoPromPieza      interface{}
 	PrecioDetalle      float64
 	EscalaDetalle      string
@@ -162,8 +193,8 @@ func (q *Queries) GetProductsInfo(ctx context.Context, productCodes []string) ([
 			&i.Sublinea,
 			&i.Marca,
 			&i.Existencia,
+			&i.ScorePopularidad,
 			&i.PesoPromCaja,
-			&i.PiezasPorCaja,
 			&i.PreoPromPieza,
 			&i.PrecioDetalle,
 			&i.EscalaDetalle,

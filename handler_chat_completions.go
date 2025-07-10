@@ -76,16 +76,16 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 	// Process suer query
 	geminiResponseContent, err := processUserQuery(userQuery)
 	if err != nil {
-		log.Fatalf("failed to process user query: %v", err)
+		log.Printf("failed to process user query: %v\n", err)
 		http.Error(w, "Failed to get response from gemini", http.StatusInternalServerError)
 		return
 	}
 
 	openAIResp := OpenAIResponse{
-		ID:      "chatcmpl-custom-" + uuid.New().String(), // You'll need a UUID generator
+		ID:      "chatcmpl-custom-" + uuid.New().String(),
 		Object:  "chat.completion",
-		Created: 0, // Placeholder
-		Model:   "gemini-pro",
+		Created: 0,
+		Model:   GeminiModel,
 		Choices: []OpenAIChoice{
 			{
 				Index: 0,
@@ -96,7 +96,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 			},
 		},
 		Usage: OpenAIUsage{
-			PromptTokens:     0, // Not provided by Gemini directly in this format
+			PromptTokens:     0,
 			CompletionTokens: 0,
 			TotalTokens:      0,
 		},
@@ -108,38 +108,42 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func processUserQuery(userQuery string) (string, error) {
-	// Create context and client
 	ctx := context.Background()
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: GeminiKey})
 	if err != nil {
 		return "", fmt.Errorf("failed to create client: %w", err)
 	}
 
+	// Create function declarations for chat tools
 	listaProductosFunc := genai.FunctionDeclaration{
 		Name: "obtenerListaDeProductos",
-		Description: "Obtiene una lista de todos los productos disponibles " +
-			"en la base de datos y la devuelve como una cadena JSON. " +
-			"La lista contiene información básica: " +
-			"código, descripción, línea, sublínea, marca y score de popularidad " +
-			"Un score de popularidad alto indica que es un producto muy vendido o popular. " +
-			"Esta lista se puede usar para: " +
-			"saber que tipo de productos vendemos (lineas y sublineas), " +
-			"saber que marcas de productos tenemos, " +
-			"saber los códigos y nombres de productos que vendemos, " +
-			"saber cuales son los productos más populares o vendidos (score de popularidad)",
+		Description: "Devuelve un JSON con la lista de los productos " +
+			"disponibles en la base de datos. " +
+			"Incluye código, descripción, línea, sublínea, marca y " +
+			"score de popularidad (alto = popular). ",
+		// "Esta lista se debe usar para: " +
+		// "saber los códigos y nombres de productos que vendemos, " +
+		// "saber que tipo de productos vendemos (lineas y sublineas), " +
+		// "saber que marcas de productos tenemos, " +
+		// "saber cuales son los productos más populares o vendidos.",
 		Parameters: &genai.Schema{Type: genai.TypeObject},
 		Response:   &genai.Schema{Type: genai.TypeString},
 	}
 
 	infoProductosFunc := genai.FunctionDeclaration{
-		Name:        "obtenerInformacionDeProductos",
-		Description: "Obtiene información detallada para una lista de códigos de productos específicos. Devuelve un JSON con el código, descripción, línea, sublínea, marca, existencia, peso promedio por caja, piezas por caja, peso promedio por pieza, y diferentes escalas de precios (detalle, medio mayoreo, mayoreo, especial).",
+		Name: "obtenerInformacionDeProductos",
+		Description: "Devuelve un JSON con info. detallada de productos por código: " +
+			"descripción, línea, sublínea, marca, existencia, popularidad, pesos promedio, " +
+			"piezas por caja, y precios escalonados (detalle, medio mayoreo, mayoreo, especial) " +
+			"con sus rangos de Kg. El precio de detalle se usa desde 0Kg " +
+			"hasta la escala detalle, el precio medio mayoreo se usa para cantidades " +
+			"entre escala detalle y escala medio mayoreo y así sucesivamente.",
 		Parameters: &genai.Schema{
 			Type: genai.TypeObject,
 			Properties: map[string]*genai.Schema{
 				"productCodes": {
 					Type:        genai.TypeArray,
-					Description: "Una lista de códigos de productos (strings) para los que se desea obtener información.",
+					Description: "Lista de códigos de productos (strings).",
 					Items:       &genai.Schema{Type: genai.TypeString},
 				},
 			},
@@ -153,13 +157,18 @@ func processUserQuery(userQuery string) (string, error) {
 		GeminiModel,
 		&genai.GenerateContentConfig{
 			SystemInstruction: &genai.Content{
-				Parts: []*genai.Part{{Text: "Eres un agente asistente de ventas. " +
-					"Debes usar y procesar la información obtenida con estas " +
-					"herramientas para tratar de responder lo mejor posible a las preguntas " +
-					"del usuario. Tus respuestas deben ser concisas y amigables. " +
-					"Debes formatear la respuesta para ser utilizada directamente en un chat de WhatsApp. " +
-					"Si no hay forma de responder a la pregunta con las herramientas " +
-					"que se te han brindado, entonces hazlo saber al usuario."}},
+				Parts: []*genai.Part{{Text: "Eres un agente asistente de ventas. Usa tus herramientas " +
+					"para responder las preguntas del usuario de forma concisa y amigable. " +
+					"Trata de dar siempre información detallada cuando sea posible. " +
+					"Si el usuario no proporciona codigos de producto usa la función " +
+					"'obtenerListaDeProductos' y decide que codigos son relevantes para usar " +
+					"la función 'obtenerInformacionDeProductos'. " +
+					"Si el usuario solo requiere una lista de productos puedes dar la lista completa, " +
+					"pero si el requiere información detallada y no especifica un " +
+					" producto en particular debes dar prioridad a los 3 productos con mayor " +
+					"existencia y/o popularidad para mantener tu respuesta concisa. " +
+					"Formatea las respuestas para WhatsApp: usa emojis y tono casual. " +
+					"Si no puedes responder con las herramientas, infórmale al usuario."}},
 			},
 			Tools: []*genai.Tool{
 				{
@@ -190,11 +199,18 @@ func processUserQuery(userQuery string) (string, error) {
 	queries := database.New(db)
 
 	for {
+		usageDecoder, err := json.MarshalIndent(resp.UsageMetadata, "", "  ")
+		if err != nil {
+			log.Println("error decoding usage...")
+		}
+		log.Println(string(usageDecoder))
+
+		log.Println(resp.UsageMetadata)
 		if len(resp.FunctionCalls()) > 0 {
 			// log.Println("found FunctionCall...")
 			fc := resp.FunctionCalls()[0]
 
-			// log.Printf("executing %s()...", fc.Name)
+			log.Printf("executing %s()...", fc.Name)
 			var result string
 			switch fc.Name {
 			case "obtenerListaDeProductos":
@@ -212,6 +228,7 @@ func processUserQuery(userQuery string) (string, error) {
 				} else {
 					log.Println("failed to extract args from FunctionCall...")
 				}
+				log.Printf("searching for : %v\n", codigos)
 				result = obtenerInformacionDeProductos(queries, codigos)
 			default:
 				result = fmt.Sprintf("failed to call %s() function", fc.Name)
