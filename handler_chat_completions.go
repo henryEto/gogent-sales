@@ -15,38 +15,6 @@ import (
 	"google.golang.org/genai"
 )
 
-// Define structs to match OpenAI Chat Completions API request/response for simplicity
-
-type OpenAIRequest struct {
-	Messages []OpenAIMessage `json:"messages"`
-	Model    string          `json:"model"`
-}
-
-type OpenAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type OpenAIResponse struct {
-	ID      string         `json:"id"`
-	Object  string         `json:"object"`
-	Created int64          `json:"created"`
-	Model   string         `json:"model"`
-	Choices []OpenAIChoice `json:"choices"`
-	Usage   OpenAIUsage    `json:"usage"`
-}
-
-type OpenAIChoice struct {
-	Index   int           `json:"index"`
-	Message OpenAIMessage `json:"message"`
-}
-
-type OpenAIUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}
-
 func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 	// Check for correct method POST
 	if r.Method != http.MethodPost {
@@ -81,6 +49,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate OpenAIResponse struct
 	openAIResp := OpenAIResponse{
 		ID:      "chatcmpl-custom-" + uuid.New().String(),
 		Object:  "chat.completion",
@@ -114,68 +83,16 @@ func processUserQuery(userQuery string) (string, error) {
 		return "", fmt.Errorf("failed to create client: %w", err)
 	}
 
-	// Create function declarations for chat tools
-	listaProductosFunc := genai.FunctionDeclaration{
-		Name: "obtenerListaDeProductos",
-		Description: "Devuelve un JSON con la lista de los productos " +
-			"disponibles en la base de datos. " +
-			"Incluye código, descripción, línea, sublínea, marca y " +
-			"score de popularidad (alto = popular). ",
-		// "Esta lista se debe usar para: " +
-		// "saber los códigos y nombres de productos que vendemos, " +
-		// "saber que tipo de productos vendemos (lineas y sublineas), " +
-		// "saber que marcas de productos tenemos, " +
-		// "saber cuales son los productos más populares o vendidos.",
-		Parameters: &genai.Schema{Type: genai.TypeObject},
-		Response:   &genai.Schema{Type: genai.TypeString},
-	}
-
-	infoProductosFunc := genai.FunctionDeclaration{
-		Name: "obtenerInformacionDeProductos",
-		Description: "Devuelve un JSON con info. detallada de productos por código: " +
-			"descripción, línea, sublínea, marca, existencia, popularidad, pesos promedio, " +
-			"piezas por caja, y precios escalonados (detalle, medio mayoreo, mayoreo, especial) " +
-			"con sus rangos de Kg. El precio de detalle se usa desde 0Kg " +
-			"hasta la escala detalle, el precio medio mayoreo se usa para cantidades " +
-			"entre escala detalle y escala medio mayoreo y así sucesivamente.",
-		Parameters: &genai.Schema{
-			Type: genai.TypeObject,
-			Properties: map[string]*genai.Schema{
-				"productCodes": {
-					Type:        genai.TypeArray,
-					Description: "Lista de códigos de productos (strings).",
-					Items:       &genai.Schema{Type: genai.TypeString},
-				},
-			},
-			Required: []string{"productCodes"},
-		},
-		Response: &genai.Schema{Type: genai.TypeString},
-	}
-
 	chat, err := client.Chats.Create(
 		ctx,
 		GeminiModel,
 		&genai.GenerateContentConfig{
 			SystemInstruction: &genai.Content{
-				Parts: []*genai.Part{{Text: "Eres un agente asistente de ventas. Usa tus herramientas " +
-					"para responder las preguntas del usuario de forma concisa y amigable. " +
-					"Trata de dar siempre información detallada cuando sea posible. " +
-					"Si el usuario no proporciona codigos de producto usa la función " +
-					"'obtenerListaDeProductos' y decide que codigos son relevantes para usar " +
-					"la función 'obtenerInformacionDeProductos'. " +
-					"Si el usuario solo requiere una lista de productos puedes dar la lista completa, " +
-					"pero si el requiere información detallada y no especifica un " +
-					" producto en particular debes dar prioridad a los 3 productos con mayor " +
-					"existencia y/o popularidad para mantener tu respuesta concisa. " +
-					"Formatea las respuestas para WhatsApp: usa emojis y tono casual. " +
-					"Si no puedes responder con las herramientas, infórmale al usuario."}},
+				Parts: []*genai.Part{{Text: getSystemPrompt()}},
 			},
 			Tools: []*genai.Tool{
 				{
-					FunctionDeclarations: []*genai.FunctionDeclaration{
-						&listaProductosFunc,
-						&infoProductosFunc,
-					},
+					FunctionDeclarations: ToolFunctions.getDeclarationsList(),
 				},
 			},
 		},
@@ -199,40 +116,17 @@ func processUserQuery(userQuery string) (string, error) {
 	queries := database.New(db)
 
 	for {
-		usageDecoder, err := json.MarshalIndent(resp.UsageMetadata, "", "  ")
-		if err != nil {
-			log.Println("error decoding usage...")
-		}
-		log.Println(string(usageDecoder))
+		log.Printf("total usage: %v tokens\n", resp.UsageMetadata.TotalTokenCount)
 
-		log.Println(resp.UsageMetadata)
 		if len(resp.FunctionCalls()) > 0 {
 			// log.Println("found FunctionCall...")
 			fc := resp.FunctionCalls()[0]
 
-			log.Printf("executing %s()...", fc.Name)
+			// log.Printf("executing %s()...", fc.Name)
 			var result string
-			switch fc.Name {
-			case "obtenerListaDeProductos":
-				result = obtenerListaDeProductos(queries)
-			case "obtenerInformacionDeProductos":
-				var codigos []string
-				if argCodes, ok := fc.Args["productCodes"]; ok {
-					if codesSlice, ok := argCodes.([]any); ok {
-						for _, v := range codesSlice {
-							if str, ok := v.(string); ok {
-								codigos = append(codigos, str)
-							}
-						}
-					}
-				} else {
-					log.Println("failed to extract args from FunctionCall...")
-				}
-				log.Printf("searching for : %v\n", codigos)
-				result = obtenerInformacionDeProductos(queries, codigos)
-			default:
-				result = fmt.Sprintf("failed to call %s() function", fc.Name)
-			}
+
+			functionTool := ToolFunctions.getToolByName(fc.Name)
+			result = functionTool.Function(queries, fc.Args)
 			// log.Println("sending function result back to Gemini...")
 			resp, err = chat.SendMessage(
 				ctx,
@@ -255,37 +149,16 @@ func processUserQuery(userQuery string) (string, error) {
 		}
 	}
 
-	return resp.Text(), nil
+	return formatResponse(resp.Text()), nil
 }
 
-func obtenerListaDeProductos(queries *database.Queries) string {
-	productos, err := queries.GetListOfProducts(context.Background())
-	if err != nil {
-		log.Printf("failed to get products list: %v", err)
-		return "ocurrió un error al obtener la lista de productos"
-	}
+func formatResponse(response string) string {
+	header := `*¡Hola! 😊 Gracias por tu interés en nuestros productos!*
 
-	jsonData, err := json.Marshal(productos)
-	if err != nil {
-		log.Printf("failed to marshal results: %v", err)
-		return "ocurrió un error al obtener la lista de productos"
-	}
+🚚 Hacemos entregas en Tula, Tepeji, Chapantongo, Jilotepec, Huehuetoca, Ixmiquilpan, Mixquiahuala y alrededores.`
+	foot := `📍 También puedes visitarnos aquí: https://maps.app.goo.gl/QDv4HnqqJhqQ24BP8?g_st=ac
+📲 Mándanos mensaje por WhatsApp: https://wa.me/527731819900
+🐔 *COPOCAR* agradece tu preferencia!🙏`
 
-	return string(jsonData)
-}
-
-func obtenerInformacionDeProductos(queries *database.Queries, productCodes []string) string {
-	infoProductos, err := queries.GetProductsInfo(context.Background(), productCodes)
-	if err != nil {
-		log.Printf("failed to get products info: %v", err)
-		return "ocurrió un error al obtener la información de los productos"
-	}
-
-	jsonData, err := json.Marshal(infoProductos)
-	if err != nil {
-		log.Printf("failed to marshal results: %v", err)
-		return "ocurrió un error al obtener la información de los productos"
-	}
-
-	return string(jsonData)
+	return fmt.Sprintf("%s\n\n\n%s\n\n\n%s", header, response, foot)
 }

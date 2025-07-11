@@ -17,6 +17,8 @@ var (
 	APIPort     string
 )
 
+var ToolFunctions = getCompletionTools()
+
 func main() {
 	err := loadEnv()
 	if err != nil {

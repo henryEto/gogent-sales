@@ -10,71 +10,41 @@ import (
 	"strings"
 )
 
-const getListOfProducts = `-- name: GetListOfProducts :many
-WITH product_sales AS (
-  SELECT
-    a.vcodpro AS codigo,
-    a.vdescri AS descripcion,
-    l.vdescri AS linea,
-    a.vsublin AS sublinea,
-    a.vmarart AS marca,
-    SUM(m.vcantid) AS cantidad_vendida,
-    COUNT(m.vcodpro) AS num_ventas
-  FROM articulos a
-  JOIN lineas l ON a.vlinart = l.vlindep
-  INNER JOIN movimientosd m
-    ON a.vcodpro = m.vcodpro
-  WHERE
-    a.vtippro = 1
-    AND a.vdescri != ''
-    AND a.vlinart NOT IN ('9', '13')
-    AND STR_TO_DATE(m.vfecham, '%Y-%m-%d') >= CURDATE() - INTERVAL 30 DAY
-    AND m.vtipmov = 'caj01'
-    AND m.vcantid > 0
-  GROUP BY
-    a.vcodpro, a.vdescri, l.vdescri, a.vsublin, a.vmarart
-)
+const getAllProductCodes = `-- name: GetAllProductCodes :many
 SELECT
-  ps.codigo,
-  ps.descripcion,
-  ps.linea,
-  ps.sublinea,
-  ps.marca,
-  CAST((ps.cantidad_vendida * 1.0 / SUM(ps.cantidad_vendida) OVER ()) * 70.0 +
-  (ps.num_ventas * 1.0 / SUM(ps.num_ventas) OVER ()) * 30.0 AS DECIMAL(10,4)) AS score_popularidad
-FROM product_sales ps
-WHERE ps.cantidad_vendida > 0
-ORDER BY
-  score_popularidad DESC
+  a.vcodpro AS codigo,
+  a.vdescri AS descripcion
+FROM articulos a
+INNER JOIN movimientosd m
+  ON a.vcodpro = m.vcodpro
+WHERE
+  a.vtippro = 1
+  AND a.vdescri != ''
+  AND a.vlinart NOT IN ('9', '13')
+  AND STR_TO_DATE(m.vfecham, '%Y-%m-%d') >= CURDATE() - INTERVAL 45 DAY
+  AND m.vtipmov IN ('caj01', 'ent01')
+  AND m.vcantid > 0
+GROUP BY
+  a.vcodpro, a.vdescri, a.vsublin, a.vmarart
+ORDER BY CAST(a.vcodpro AS UNSIGNED)
 `
 
-type GetListOfProductsRow struct {
-	Codigo           string
-	Descripcion      string
-	Linea            string
-	Sublinea         string
-	Marca            string
-	ScorePopularidad string
+type GetAllProductCodesRow struct {
+	Codigo      string
+	Descripcion string
 }
 
 // sql/queries/products.sql
-func (q *Queries) GetListOfProducts(ctx context.Context) ([]GetListOfProductsRow, error) {
-	rows, err := q.db.QueryContext(ctx, getListOfProducts)
+func (q *Queries) GetAllProductCodes(ctx context.Context) ([]GetAllProductCodesRow, error) {
+	rows, err := q.db.QueryContext(ctx, getAllProductCodes)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []GetListOfProductsRow
+	var items []GetAllProductCodesRow
 	for rows.Next() {
-		var i GetListOfProductsRow
-		if err := rows.Scan(
-			&i.Codigo,
-			&i.Descripcion,
-			&i.Linea,
-			&i.Sublinea,
-			&i.Marca,
-			&i.ScorePopularidad,
-		); err != nil {
+		var i GetAllProductCodesRow
+		if err := rows.Scan(&i.Codigo, &i.Descripcion); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -88,87 +58,214 @@ func (q *Queries) GetListOfProducts(ctx context.Context) ([]GetListOfProductsRow
 	return items, nil
 }
 
-const getProductsInfo = `-- name: GetProductsInfo :many
-WITH product_sales AS(
+const getProductCodesByBrand = `-- name: GetProductCodesByBrand :many
+SELECT
+  a.vcodpro AS codigo,
+  a.vdescri AS descripcion
+FROM articulos a
+INNER JOIN movimientosd m
+  ON a.vcodpro = m.vcodpro
+WHERE
+  a.vmarart LIKE CONCAT('%', ?, '%')
+  AND a.vtippro = 1
+  AND a.vdescri != ''
+  AND a.vlinart NOT IN ('9', '13')
+  AND STR_TO_DATE(m.vfecham, '%Y-%m-%d') >= CURDATE() - INTERVAL 45 DAY
+  AND m.vtipmov IN ('caj01', 'ent01')
+  AND m.vcantid > 0
+GROUP BY
+  a.vcodpro, a.vdescri, a.vsublin, a.vmarart
+ORDER BY CAST(a.vcodpro AS UNSIGNED)
+`
+
+type GetProductCodesByBrandRow struct {
+	Codigo      string
+	Descripcion string
+}
+
+func (q *Queries) GetProductCodesByBrand(ctx context.Context, brand interface{}) ([]GetProductCodesByBrandRow, error) {
+	rows, err := q.db.QueryContext(ctx, getProductCodesByBrand, brand)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetProductCodesByBrandRow
+	for rows.Next() {
+		var i GetProductCodesByBrandRow
+		if err := rows.Scan(&i.Codigo, &i.Descripcion); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getProductCodesByCategory = `-- name: GetProductCodesByCategory :many
+SELECT
+  a.vcodpro AS codigo,
+  a.vdescri AS descripcion,
+  a.vsublin
+FROM articulos a
+JOIN lineas l ON a.vlinart = l.vlindep
+INNER JOIN movimientosd m
+  ON a.vcodpro = m.vcodpro
+WHERE
+  l.vdescri LIKE CONCAT('%', ?, '%')
+  AND a.vsublin LIKE CONCAT('%', ?, '%')
+  AND a.vtippro = 1
+  AND a.vdescri != ''
+  AND a.vlinart NOT IN ('9', '13')
+  AND STR_TO_DATE(m.vfecham, '%Y-%m-%d') >= CURDATE() - INTERVAL 45 DAY
+  AND m.vtipmov IN ('caj01', 'ent01')
+  AND m.vcantid > 0
+GROUP BY
+  a.vcodpro, a.vdescri, a.vsublin, a.vmarart
+ORDER BY CAST(a.vcodpro AS UNSIGNED)
+`
+
+type GetProductCodesByCategoryParams struct {
+	Linea    interface{}
+	Sublinea interface{}
+}
+
+type GetProductCodesByCategoryRow struct {
+	Codigo      string
+	Descripcion string
+	Vsublin     string
+}
+
+func (q *Queries) GetProductCodesByCategory(ctx context.Context, arg GetProductCodesByCategoryParams) ([]GetProductCodesByCategoryRow, error) {
+	rows, err := q.db.QueryContext(ctx, getProductCodesByCategory, arg.Linea, arg.Sublinea)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetProductCodesByCategoryRow
+	for rows.Next() {
+		var i GetProductCodesByCategoryRow
+		if err := rows.Scan(&i.Codigo, &i.Descripcion, &i.Vsublin); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getProductCodesBySearchTerm = `-- name: GetProductCodesBySearchTerm :many
+SELECT
+  a.vcodpro AS codigo,
+  a.vdescri AS descripcion
+FROM articulos a
+JOIN lineas l ON a.vlinart = l.vlindep
+INNER JOIN movimientosd m
+  ON a.vcodpro = m.vcodpro
+WHERE
+  (
+    l.vdescri LIKE CONCAT('%', ?, '%') OR 
+    a.vsublin LIKE CONCAT('%', ?, '%') OR
+    a.vdescri LIKE CONCAT('%', ?, '%')
+  )
+  AND a.vtippro = 1
+  AND a.vdescri != ''
+  AND a.vlinart NOT IN ('9', '13')
+  AND STR_TO_DATE(m.vfecham, '%Y-%m-%d') >= CURDATE() - INTERVAL 45 DAY
+  AND m.vtipmov IN ('caj01', 'ent01')
+  AND m.vcantid > 0
+GROUP BY
+  a.vcodpro, a.vdescri, a.vsublin, a.vmarart
+ORDER BY CAST(a.vcodpro AS UNSIGNED)
+`
+
+type GetProductCodesBySearchTermParams struct {
+	SearchTerm interface{}
+}
+
+type GetProductCodesBySearchTermRow struct {
+	Codigo      string
+	Descripcion string
+}
+
+func (q *Queries) GetProductCodesBySearchTerm(ctx context.Context, arg GetProductCodesBySearchTermParams) ([]GetProductCodesBySearchTermRow, error) {
+	rows, err := q.db.QueryContext(ctx, getProductCodesBySearchTerm, arg.SearchTerm, arg.SearchTerm, arg.SearchTerm)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetProductCodesBySearchTermRow
+	for rows.Next() {
+		var i GetProductCodesBySearchTermRow
+		if err := rows.Scan(&i.Codigo, &i.Descripcion); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getProductsInfoByCode = `-- name: GetProductsInfoByCode :many
 SELECT
     a.vcodpro AS codigo,
     a.vdescri AS descripcion,
-    l.vdescri AS linea,
-    a.vsublin AS sublinea,
     a.vmarart AS marca,
-    a.vexiact as existencia,
-    SUM(m.vcantid) AS cantidad_vendida,
-    COUNT(m.vcodpro) AS num_ventas,
-    a.vmedpes as peso_prom_caja,
+    a.vexiact as existencia_kg,
+    a.vmedpes as peso_promedio_caja_kg,
     a.vpresen AS piezas_por_caja,
-    a.vmedpes / a.vpresen AS preo_prom_pieza,
+    a.vmedpes / a.vpresen AS peso_promedio_pieza_kg,
     g.fac1 AS precio_detalle,
     g.facd1 AS escala_detalle,
     g.fac2 AS precio_medio_mayoreo,
     g.facd2 AS escala_medio_mayoreo,
-    g.fac3 AS precio_mayoreo,
-    g.facd3 AS escala_mayoreo,
-    g.fac4 AS precio__especial,
-    g.facd4 AS escala_especial
+    g.fac3 AS precio_mayoreo
 FROM articulos a
 JOIN lineas l ON a.vlinart = l.vlindep
 JOIN grupos g ON a.vcodpro = g.grupo
   INNER JOIN movimientosd m ON a.vcodpro = m.vcodpro
 WHERE
     a.vcodpro IN (/*SLICE:product_codes*/?)
-    AND STR_TO_DATE(m.vfecham, '%Y-%m-%d') >= CURDATE() - INTERVAL 30 DAY
-    AND m.vtipmov = 'caj01'
+    AND a.vtippro = 1
+  	AND a.vdescri != ''
+	  AND a.vlinart not in ('9', '13') 
+  AND m.vtipmov IN ('caj01', 'ent01')
     AND m.vcantid > 0
 GROUP BY
     a.vcodpro, a.vdescri, l.vdescri, a.vsublin, a.vmarart
-)
-SELECT
-  ps.codigo,
-  ps.descripcion,
-  ps.linea,
-  ps.sublinea,
-  ps.marca,
-  ps.existencia,
-  CAST((ps.cantidad_vendida * 1.0 / SUM(ps.cantidad_vendida) OVER ()) * 70.0 +
-  (ps.num_ventas * 1.0 / SUM(ps.num_ventas) OVER ()) * 30.0 AS DECIMAL(10,4)) AS score_popularidad,
-  ps.peso_prom_caja,
-  ps.preo_prom_pieza,
-  ps.precio_detalle,
-  ps.escala_detalle,
-  ps.precio_medio_mayoreo,
-  ps.escala_medio_mayoreo,
-  ps.precio_mayoreo,
-  ps.escala_mayoreo,
-  ps.precio__especial,
-  ps.escala_especial
-FROM product_sales ps
-WHERE ps.cantidad_vendida > 0
-ORDER BY
-  score_popularidad DESC
 `
 
-type GetProductsInfoRow struct {
-	Codigo             string
-	Descripcion        string
-	Linea              string
-	Sublinea           string
-	Marca              string
-	Existencia         float64
-	ScorePopularidad   string
-	PesoPromCaja       float64
-	PreoPromPieza      interface{}
-	PrecioDetalle      float64
-	EscalaDetalle      string
-	PrecioMedioMayoreo float64
-	EscalaMedioMayoreo string
-	PrecioMayoreo      float64
-	EscalaMayoreo      string
-	PrecioEspecial     float64
-	EscalaEspecial     string
+type GetProductsInfoByCodeRow struct {
+	Codigo              string
+	Descripcion         string
+	Marca               string
+	ExistenciaKg        float64
+	PesoPromedioCajaKg  float64
+	PiezasPorCaja       int32
+	PesoPromedioPiezaKg interface{}
+	PrecioDetalle       float64
+	EscalaDetalle       string
+	PrecioMedioMayoreo  float64
+	EscalaMedioMayoreo  string
+	PrecioMayoreo       float64
 }
 
-func (q *Queries) GetProductsInfo(ctx context.Context, productCodes []string) ([]GetProductsInfoRow, error) {
-	query := getProductsInfo
+func (q *Queries) GetProductsInfoByCode(ctx context.Context, productCodes []string) ([]GetProductsInfoByCodeRow, error) {
+	query := getProductsInfoByCode
 	var queryParams []interface{}
 	if len(productCodes) > 0 {
 		for _, v := range productCodes {
@@ -183,27 +280,22 @@ func (q *Queries) GetProductsInfo(ctx context.Context, productCodes []string) ([
 		return nil, err
 	}
 	defer rows.Close()
-	var items []GetProductsInfoRow
+	var items []GetProductsInfoByCodeRow
 	for rows.Next() {
-		var i GetProductsInfoRow
+		var i GetProductsInfoByCodeRow
 		if err := rows.Scan(
 			&i.Codigo,
 			&i.Descripcion,
-			&i.Linea,
-			&i.Sublinea,
 			&i.Marca,
-			&i.Existencia,
-			&i.ScorePopularidad,
-			&i.PesoPromCaja,
-			&i.PreoPromPieza,
+			&i.ExistenciaKg,
+			&i.PesoPromedioCajaKg,
+			&i.PiezasPorCaja,
+			&i.PesoPromedioPiezaKg,
 			&i.PrecioDetalle,
 			&i.EscalaDetalle,
 			&i.PrecioMedioMayoreo,
 			&i.EscalaMedioMayoreo,
 			&i.PrecioMayoreo,
-			&i.EscalaMayoreo,
-			&i.PrecioEspecial,
-			&i.EscalaEspecial,
 		); err != nil {
 			return nil, err
 		}
