@@ -144,3 +144,7 @@ Once both the Go backend and Open WebUI are running and configured:
   * `open-webui-config.json`: Example configuration for Open WebUI.
 
 
+## LICENSE
+This project is a personal work and is provided for viewing purposes only.
+All rights reserved. Unauthorized use, reproduction, or distribution
+of this code, in whole or in part, is strictly prohibited.
