@@ -35,9 +35,7 @@ func getCompletionTools() CompletionTools {
 				Declaration: &genai.FunctionDeclaration{
 					Name: "obtenerInformacionPorBusqueda",
 					Description: "Hace una búsqueda de productos basado en un término de búsqueda " +
-						"y devuelve un JSON con la información detallada de los productos: " +
-						"descripción, línea, sublínea, marca, existencia, popularidad, pesos promedio, " +
-						"piezas por caja, y precios.",
+						"y devuelve un JSON con la información detallada de los productos. El término de búsqueda debe ser una sola palabra en singular.",
 					Parameters: &genai.Schema{
 						Type: genai.TypeObject,
 						Properties: map[string]*genai.Schema{
