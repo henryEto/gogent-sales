@@ -13,9 +13,10 @@ func getSystemPrompt() string {
 * 📦 *Peso prom. caja:* [.2f] Kg
 * 📦 *Piezas x caja:*
 * ⚖ *Peso prom. pieza:* [.2f] Kg
-* 🏷 *Precio detalle:* $[precio] (hasta escala detalle Kg)
-* 💰 *Precio medio mayoreo y escala:* $[precio] (de escala detalle a escala medio mayoreo Kg)
-* 💸 *Precio mayoreo y escala:*  $[precio] (de escala medio mayoreo en adelante Kg)
+* 💲 *Precios por Kg:*
+	* 🏷 *Detalle:* $[precio] (hasta [escala_detalle] Kg)
+  * 💰 *Medio mayoreo:* $[precio] ([escala_detalle]-[escala_medio_mayoreo] Kg)
+  * 💸 *Mayoreo:*  $[precio] (más de [escala_medio_mayoreo] Kg)
 * 📥 *Existencia Kg:* [.2f] Kg
         `
 }
